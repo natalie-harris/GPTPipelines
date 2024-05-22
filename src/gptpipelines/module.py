@@ -170,7 +170,7 @@ class Valve_Module(Module):
             # Get the text at the file referenced in File Path
             entry = self.input_df.loc[row_index]
             path = entry['File Path']
-            extension = path[path.find("."):]
+            extension = path[path.rfind("."):]
             if extension in ['.txt', '.text']:
                 with open(path, 'r', encoding='utf-8') as file:
                     file_contents = file.read()
@@ -622,6 +622,48 @@ class Code_Module(Module):
         result = self.process_function(self.pipeline, **self.func_args)
         return result
     
+class Apply_Module(Module):
+    def __init__(self, pipeline, apply_function, input_df_name, output_df_name, input_columns=[], output_columns=[], input_completed_column='Completed', output_completed_column='Completed'):
+        super().__init__(pipeline=pipeline)
+        self.process_function = apply_function
+        self.input_columns = input_columns
+        self.output_columns = output_columns
+        self.input_df_name = input_df_name
+        self.output_df_name = output_df_name
+        self.input_completed_column = input_completed_column
+        self.output_completed_column = output_completed_column
+        self.func_args = {}
+
+    # def setup_dfs(self):
+    #     params = inspect.signature(self.process_function).parameters
+
+    #     for input_column in self.input_columns:
+    #         if not input_column in params:
+    #             warnings.warn(f"You've requested '{input_column}' in your Apply_Module but you aren't calling it in the apply function.")
+    #         # else:
+    #         #     self.func_args[input_column] = 
+
+    def process(self):
+        working = False
+
+        input_df = self.pipeline.get_df(self.input_df_name)
+        output_df = self.pipeline.get_df(self.output_df_name)
+        incomplete_input = input_df[input_df['Completed'] == 0]
+        
+        if len(incomplete_input) > 0:
+            working = True
+
+        for index, row in incomplete_input.iterrows():
+            row[self.input_completed_column] = 1
+            for column in self.input_columns:
+                self.func_args[column] = row[column]
+
+            new_row = self.process_function(self.pipeline, **self.func_args)
+
+            output_df.loc[len(output_df)] = new_row
+
+        return working
+
 class Duplication_Module(Module):
     """
     A module for duplicating entries from an input DataFrame to multiple output DataFrames.

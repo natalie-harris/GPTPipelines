@@ -1,4 +1,4 @@
-from gptpipelines.module import Module, Valve_Module, ChatGPT_Module, Code_Module, Duplication_Module, LLM_Module
+from gptpipelines.module import Module, Valve_Module, ChatGPT_Module, Code_Module, Duplication_Module, LLM_Module, Apply_Module
 from gptpipelines.chatgpt_broker import ChatGPTBroker
 from gptpipelines.helper_functions import truncate, all_entries_are_true
 from pathlib import Path
@@ -410,6 +410,10 @@ class GPTPipeline:
 
         code_module = Code_Module(pipeline=self, process_function=process_function, input_df_names=input_df_names, output_df_names=output_df_names)
         self.modules[name] = code_module
+
+    def add_apply_module(self, name, apply_function, input_df_name, output_df_name, input_columns=[], output_columns=[], input_completed_column='Completed', output_completed_column='Completed'):
+        apply_module = Apply_Module(pipeline=self, apply_function=apply_function, input_df_name=input_df_name, output_df_name=output_df_name, input_columns=input_columns, output_columns=output_columns, input_completed_column=input_completed_column, output_completed_column=output_completed_column)
+        self.modules[name] = apply_module
 
     def add_duplication_module(self, name, input_df_name, output_df_names, input_completed_column='Completed', delete=False):
         """
