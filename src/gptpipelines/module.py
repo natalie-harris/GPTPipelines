@@ -7,8 +7,6 @@ import warnings
 import logging
 import textract
 from pdfminer.high_level import extract_text
-# from transformers import pipeline as hf_pipeline
-# from transformers import AutoTokenizer, AutoModelForCausalLM
 
 class Module(ABC):
     """
@@ -207,56 +205,6 @@ class Valve_Module(Module):
         logging.getLogger().setLevel(original_logging_level)
 
         return working
-
-# class TransformersPipeline_Module(Module):
-#     """
-#     A generic class that allows the user to add transformers.pipeline objects
-#     for various NLP tasks, with the ability to specify the model and tokenizer.
-#     """
-
-#     def __init__(self, pipeline, task, model=None, tokenizer=None, framework='pt', **pipeline_kwargs):
-#         """
-#         Initializes the TransformersPipeline_Module instance with a specified NLP task,
-#         and optionally with a specific model and tokenizer.
-
-#         Parameters:
-#         - pipeline (GPTPipeline): The GPTPipeline instance to which the module belongs.
-#         - task (str): The task to be performed by the transformers pipeline (e.g., 'sentiment-analysis').
-#         - model (str, optional): The model ID or model instance to be used for the task.
-#         - tokenizer (str, optional): The tokenizer ID or tokenizer instance to be used with the model.
-#         - framework (str, optional): The framework to use ('pt' for PyTorch, 'tf' for TensorFlow).
-#         - **pipeline_kwargs: Additional keyword arguments passed to the transformers pipeline.
-#         """
-#         super().__init__(pipeline, name=task)
-#         # Initialize the Hugging Face pipeline with specified parameters
-#         self.transformers_pipeline = hf_pipeline(task, model=model, tokenizer=tokenizer, framework=framework, **pipeline_kwargs)
-    
-#     def process(self, input_texts):
-#         """
-#         Processes a list of input texts through the specified Hugging Face pipeline,
-#         storing the output in a DataFrame.
-
-#         Parameters:
-#         - input_texts (list of str): The input texts to be processed by the pipeline.
-
-#         Returns:
-#         - pd.DataFrame: A DataFrame with two columns: 'input_text' and 'result',
-#                         where 'result' contains the output from the pipeline.
-#         """
-#         # Ensure input_texts is a list of strings
-#         if not isinstance(input_texts, list):
-#             raise ValueError("input_texts must be a list of strings.")
-        
-#         # Process each text through the pipeline and collect results
-#         results = [self.transformers_pipeline(text) for text in input_texts]
-
-#         # Create a DataFrame from the inputs and results
-#         df = pd.DataFrame({
-#             "input_text": input_texts,
-#             "result": results
-#         })
-
-#         return df
 
 """
 LLM Modules take in a dataframe as input and write to a dataframe as output. 
@@ -671,7 +619,7 @@ class Apply_Module(Module):
             self.pipeline.dfs[self.output_df_name][0][feature] = pd.Series(dtype=dtype)
 
         for output_column in self.output_columns:
-            self.pipeline.dfs[self.output_df_name][0][feature] = pd.Series(dtype=object)
+            self.pipeline.dfs[self.output_df_name][0][output_column] = pd.Series(dtype=object)
 
         self.pipeline.dfs[self.output_df_name][0][self.output_completed_column] = pd.Series(dtype="int")
 
@@ -682,30 +630,117 @@ class Apply_Module(Module):
 
         input_df = self.pipeline.get_df(self.input_df_name)
         output_df = self.pipeline.get_df(self.output_df_name)
-        incomplete_input = input_df[input_df['Completed'] == 0]
-        
+        incomplete_input = input_df[input_df[self.input_completed_column] == 0]
+
         if len(incomplete_input) > 0:
             working = True
 
         for index, row in incomplete_input.iterrows():
+            # Mark as completed in the input DataFrame in-place
+            input_df.at[index, self.input_completed_column] = 1
 
-            row[self.input_completed_column] = 1
+            # Prepare arguments for processing function
             for column, parameter in self.input_columns.items():
                 self.func_args[parameter] = row[column]
 
-            output_features = self.process_function(self.pipeline, **self.func_args)
-            
+            # Execute processing function and handle its output
+            output_features = self.process_function(**self.func_args)
+            # print(output_features)
+
+            # Ensure output is a dictionary with at least one key-value pair
             if not isinstance(output_features, dict):
-                raise TypeError(f"Expected return type dictionary, where keys are feature names and values are the return value for that feature.")
-            
+                raise TypeError("Expected return type dictionary, where keys are feature names and values are the return value for that feature.")
             if len(output_features) <= 0:
-                raise ValueError(f"Apply function must always return at least one key-value pair.")
-            
-            row_copy = row.copy()
-            row_dict = row_copy.to_dict()
+                raise ValueError("Apply function must always return at least one key-value pair.")
+
+            # Convert the original row to a dictionary and update with the new features
+            row_dict = row.to_dict()
             row_dict.update(output_features)
 
+            # print(row_dict.keys())
+
+            # Append updated row to the output DataFrame
             output_df.loc[len(output_df)] = row_dict
+
+        return working
+
+class Carry_If_True_Module(Module):
+    """
+    Module designed to carry a row from the input df into output df only if user-defined function returns True
+
+    Useful for filtering pipelines.
+    """
+
+    def __init__(self, pipeline, check_function, input_df_name, output_df_name, input_columns=[], input_completed_column='Completed'): 
+        super().__init__(pipeline=pipeline)
+        self.check_function = check_function
+        self.input_columns = input_columns
+        self.input_df_name = input_df_name
+        self.output_df_name = output_df_name
+        self.input_completed_column = input_completed_column
+        self.func_args = {}
+
+    def setup_dfs(self):
+
+        self.input_df = self.pipeline.get_df(self.input_df_name)
+        self.output_df = self.pipeline.get_df(self.output_df_name)
+
+        # Input df must contain all requested input columns
+        for input_column in self.input_columns:
+            if input_column not in self.input_df.columns or self.input_completed_column not in self.input_df.columns:
+                return False
+
+        features_dtypes = self.pipeline.dfs[self.input_df_name][0].dtypes
+        features_with_dtypes = list(features_dtypes.items())
+
+        features = []
+        dtypes = []
+
+        # Iterate over each item in features_dtypes to separate names and types
+        for feature, dtype in features_with_dtypes:
+            features.append(feature)
+            dtypes.append(dtype)
+
+        for feature, dtype in zip(features, dtypes):
+            self.pipeline.dfs[self.output_df_name][0][feature] = pd.Series(dtype=dtype)
+
+
+        return True
+
+    def process(self):
+        working = False
+
+        input_df = self.pipeline.get_df(self.input_df_name)
+        output_df = self.pipeline.get_df(self.output_df_name)
+        incomplete_input = input_df[input_df[self.input_completed_column] == 0]
+
+        if len(incomplete_input) > 0:
+            working = True
+
+        for index, row in incomplete_input.iterrows():
+            # Mark as completed in the input DataFrame in-place
+            input_df.at[index, self.input_completed_column] = 1
+
+            # Prepare arguments for processing function
+            for column, parameter in self.input_columns.items():
+                self.func_args[parameter] = row[column]
+
+            # Execute processing function and handle its output
+            output_bool = self.check_function(**self.func_args)
+            # print(output_features)
+
+            # Ensure output is a dictionary with at least one key-value pair
+            if output_bool is None or not isinstance(output_bool, bool):
+                raise TypeError("Expected return type boolean.")
+
+            # Convert the original row to a dictionary and update with the new features
+            row_dict = row.to_dict()
+
+            # print(row_dict.keys())
+
+            # If check function returns True, we append row to end of output df
+            if output_bool:
+                output_df.loc[len(output_df)] = row_dict
 
         return working
 
@@ -777,7 +812,7 @@ class Duplication_Module(Module):
 
         features_dtypes = self.input_df.dtypes
         features_with_dtypes = list(features_dtypes.items())
-        print(features_with_dtypes)
+        # print(features_with_dtypes)
 
         # print(f"FEATURES: {features_with_dtypes}")
         # print(f"{self.input_text_column}")

@@ -1,4 +1,4 @@
-from gptpipelines.module import Module, Valve_Module, ChatGPT_Module, Code_Module, Duplication_Module, LLM_Module, Apply_Module
+from gptpipelines.module import Module, Valve_Module, ChatGPT_Module, Code_Module, Duplication_Module, LLM_Module, Apply_Module, Carry_If_True_Module
 from gptpipelines.chatgpt_broker import ChatGPTBroker
 from gptpipelines.helper_functions import truncate, all_entries_are_true
 from pathlib import Path
@@ -95,7 +95,7 @@ class GPTPipeline:
 
         return self.default_model, self.default_context_window, self.default_temperature, self.default_safety_multiplier, self.default_timeout
     
-    def set_default_values(self, gpt_model=None, gpt_context_window=None, temperature=None, safety_multiplier=None, timeout=None):
+    def set_default_values(self, gpt_model=None, gpt_context_window=None, temperature=None, safety_multiplier=None, timeout=None, df_dest_folder=None, print_saved_df_info=True):
         """
         Set default configuration values.
 
@@ -110,6 +110,8 @@ class GPTPipeline:
         self.default_temperature = temperature or None
         self.default_safety_multiplier = safety_multiplier or None
         self.default_timeout = timeout or None
+        self.df_dest_folder = df_dest_folder or None
+        self.print_saved_df_info=print_saved_df_info
 
     def _generate_primary_csv(self, folder_path, dest_csv_path=None, csv_file_name='files.csv', default_features={}, file_extensions=None, include_csv=False):
         """
@@ -300,12 +302,12 @@ class GPTPipeline:
         text_df = pd.DataFrame(columns=["Source File", "Full Text", "Completed"])
 
         if files_list_dest_folder is not None:
-            self.dfs[files_list_df_name] = (files_df, folder_path)
+            self.dfs[files_list_df_name] = (files_df, files_list_dest_folder)
         else:
             self.dfs[files_list_df_name] = (files_df, None)
 
         if text_list_dest_folder is not None:
-            self.dfs[text_list_df_name] = (text_df, folder_path)
+            self.dfs[text_list_df_name] = (text_df, text_list_dest_folder)
         else:
             self.dfs[text_list_df_name] = (text_df, None)
 
@@ -314,7 +316,7 @@ class GPTPipeline:
         valve_module_name = " ".join(["Valve Module for", text_list_df_name])
 
         self.add_module(valve_module_name, Valve_Module(pipeline=self, num_texts_to_analyze=num_texts_to_analyze, files_list_df_name=files_list_df_name, text_list_df_name=text_list_df_name, max_at_once=max_files_at_once, ocr_language=ocr_language, pdf_method=pdf_method, min_pdf_extract_length=min_pdf_extract_length, name=valve_module_name))
-
+    
     def import_csv(self, name, dest_folder): # dest_path must point to the folder that the csv file is located in
         """
         Import a CSV file into a DataFrame.
@@ -330,7 +332,7 @@ class GPTPipeline:
         file_path = os.path.join(dest_folder, name)
         df = pd.read_csv(file_path)
         self.dfs[name] = (df, dest_folder)
-
+    
     def add_module(self, name, module):
         """
         Add a module to the pipeline.
@@ -346,7 +348,7 @@ class GPTPipeline:
         if not isinstance(module, Module):
             raise TypeError("Input parameter must be a module")
         self.modules[name] = module
-
+    
     def add_chatgpt_module(self, name, input_df_name, output_df_name, prompt, end_message=None, injection_columns=[], examples=[], model=None, context_window=None, temperature=None, safety_multiplier=None, max_chunks_per_text=None, timeout=None, input_text_column=None, input_completed_column='Completed', output_text_column=None, output_response_column='Response', output_completed_column='Completed'):
         """
         Add a ChatGPT module to the pipeline.
@@ -415,6 +417,10 @@ class GPTPipeline:
         apply_module = Apply_Module(pipeline=self, apply_function=apply_function, input_df_name=input_df_name, output_df_name=output_df_name, input_columns=input_columns, output_columns=output_columns, input_completed_column=input_completed_column, output_completed_column=output_completed_column)
         self.modules[name] = apply_module
 
+    def add_carry_if_true_module(self, name, check_function, input_df_name, output_df_name, input_columns=[], input_completed_column='Completed'):
+        cit_module = Carry_If_True_Module(pipeline=self, check_function=check_function, input_df_name=input_df_name, output_df_name=output_df_name, input_columns=input_columns, input_completed_column=input_completed_column)
+        self.modules[name] = cit_module
+
     def add_duplication_module(self, name, input_df_name, output_df_names, input_completed_column='Completed', delete=False):
         """
         Add a duplication module to the pipeline.
@@ -474,6 +480,9 @@ class GPTPipeline:
             print(f"'{name}' label already assigned to another DataFrame. Each DataFrame must have a unique label.")
             exit()
 
+        if dest_folder is None and self.df_dest_folder is not None:
+            dest_folder = self.df_dest_folder
+
         try:
             df = pd.DataFrame(columns=[*features])
             if len(features) != 0:
@@ -487,6 +496,9 @@ class GPTPipeline:
         # Get the current date and time and format the date and time as a string 'YYYY-MM-DD_HH-MM-SS'
         now = datetime.now()
         timestamp = now.strftime('%Y-%m-%d_%H-%M-%S')
+
+        # print(f"DFS: {self.dfs.keys()}")
+        # print(f"TEXT LIST DF: {self.dfs['Text List']}")
 
         for df_name in self.dfs:
             df = self.dfs[df_name][0]
@@ -510,12 +522,13 @@ class GPTPipeline:
 
             prepared_df = self._prepare_text_entries(df)
 
-            print(prepared_df)
+            # print(prepared_df)
                 
             # Save the DataFrame to CSV
             prepared_df.to_csv(full_path, index=False)
 
-            print(f"DataFrame {df_name} saved to {full_path}.")
+            if self.print_saved_df_info:
+                print(f"DataFrame {df_name} saved to {full_path}.")
 
         return
 
@@ -555,6 +568,10 @@ class GPTPipeline:
                     finished_setup[module] = result
                     made_progress = result or made_progress
                 elif isinstance(self.modules[module], Apply_Module) and finished_setup[module] is not True:
+                    result = self.modules[module].setup_dfs()
+                    finished_setup[module] = result
+                    made_progress = result or made_progress
+                elif isinstance(self.modules[module], Carry_If_True_Module) and finished_setup[module] is not True:
                     result = self.modules[module].setup_dfs()
                     finished_setup[module] = result
                     made_progress = result or made_progress
@@ -648,7 +665,6 @@ class GPTPipeline:
             print(formatted_df)
             print(self.dfs[name][1])
 
-    # return a df
     def get_df(self, name, include_path=False):
         """
         Retrieve a single DataFrame and optionally its destination path.
@@ -805,6 +821,7 @@ class GPTPipeline:
 
         # make sure breaking up into chunks is even possible given system message and examples token length
         static_token_length = self.gpt_broker.get_tokenized_length(system_message, "", model, examples, end_message=end_message)
+        
         if static_token_length >= int(model_context_window * safety_multiplier):
             print(f"The system message and examples are too long for the maximum token length ({int(model_context_window * safety_multiplier)})")
             return ['GPT API call failed.']
