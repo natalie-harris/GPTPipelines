@@ -423,7 +423,7 @@ class ChatGPT_Module(LLM_Module):
                 dtypes.append(dtype)
 
         for feature, dtype in zip(features, dtypes):
-            self.pipeline.dfs[self.output_df_name][0][feature] = pd.Series(dtype=object)
+            self.pipeline.dfs[self.output_df_name][0][feature] = pd.Series(dtype=dtype)
 
         self.pipeline.dfs[self.output_df_name][0][self.output_text_column] = pd.Series(dtype="string")
         self.pipeline.dfs[self.output_df_name][0][self.output_response_column] = pd.Series(dtype="string")
@@ -623,6 +623,10 @@ class Code_Module(Module):
         return result
     
 class Apply_Module(Module):
+    """
+    Module designed to iterate through each row in input_df and give requested features from row to an apply_function, which returns features (must be unique from features in input_df) to output_df. Copies all features from input_df into output_df.
+    """
+
     def __init__(self, pipeline, apply_function, input_df_name, output_df_name, input_columns=[], output_columns=[], input_completed_column='Completed', output_completed_column='Completed'):
         super().__init__(pipeline=pipeline)
         self.process_function = apply_function
@@ -634,14 +638,44 @@ class Apply_Module(Module):
         self.output_completed_column = output_completed_column
         self.func_args = {}
 
-    # def setup_dfs(self):
-    #     params = inspect.signature(self.process_function).parameters
+    def setup_dfs(self):
+        self.input_df = self.pipeline.get_df(self.input_df_name)
+        self.output_df = self.pipeline.get_df(self.output_df_name)
 
-    #     for input_column in self.input_columns:
-    #         if not input_column in params:
-    #             warnings.warn(f"You've requested '{input_column}' in your Apply_Module but you aren't calling it in the apply function.")
-    #         # else:
-    #         #     self.func_args[input_column] = 
+        # Must have at least one output column or else nothing would be added to pipeline
+        if len(self.output_columns) <= 0:
+            return False
+
+        # Input df must contain all requested input columns
+        for input_column in self.input_columns:
+            if input_column not in self.input_df.columns or self.input_completed_column not in self.input_df.columns:
+                return False
+            
+        # Requested output features must be unique from input columns so as to maintain as much simplicity as possible (as if any of this stuff is simple =O )
+        for output_column in self.output_columns:
+            if output_column in self.input_df.columns:
+                return False
+
+        features_dtypes = self.pipeline.dfs[self.input_df_name][0].dtypes
+        features_with_dtypes = list(features_dtypes.items())
+
+        features = []
+        dtypes = []
+
+        # Iterate over each item in features_dtypes to separate names and types
+        for feature, dtype in features_with_dtypes:
+            features.append(feature)
+            dtypes.append(dtype)
+
+        for feature, dtype in zip(features, dtypes):
+            self.pipeline.dfs[self.output_df_name][0][feature] = pd.Series(dtype=dtype)
+
+        for output_column in self.output_columns:
+            self.pipeline.dfs[self.output_df_name][0][feature] = pd.Series(dtype=object)
+
+        self.pipeline.dfs[self.output_df_name][0][self.output_completed_column] = pd.Series(dtype="int")
+
+        return True
 
     def process(self):
         working = False
@@ -654,13 +688,24 @@ class Apply_Module(Module):
             working = True
 
         for index, row in incomplete_input.iterrows():
+
             row[self.input_completed_column] = 1
-            for column in self.input_columns:
-                self.func_args[column] = row[column]
+            for column, parameter in self.input_columns.items():
+                self.func_args[parameter] = row[column]
 
-            new_row = self.process_function(self.pipeline, **self.func_args)
+            output_features = self.process_function(self.pipeline, **self.func_args)
+            
+            if not isinstance(output_features, dict):
+                raise TypeError(f"Expected return type dictionary, where keys are feature names and values are the return value for that feature.")
+            
+            if len(output_features) <= 0:
+                raise ValueError(f"Apply function must always return at least one key-value pair.")
+            
+            row_copy = row.copy()
+            row_dict = row_copy.to_dict()
+            row_dict.update(output_features)
 
-            output_df.loc[len(output_df)] = new_row
+            output_df.loc[len(output_df)] = row_dict
 
         return working
 

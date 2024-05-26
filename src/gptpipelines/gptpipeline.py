@@ -554,7 +554,10 @@ class GPTPipeline:
                     result = self.modules[module].setup_dfs()
                     finished_setup[module] = result
                     made_progress = result or made_progress
-
+                elif isinstance(self.modules[module], Apply_Module) and finished_setup[module] is not True:
+                    result = self.modules[module].setup_dfs()
+                    finished_setup[module] = result
+                    made_progress = result or made_progress
                 
             if not made_progress:
                 print(finished_setup)
@@ -836,7 +839,7 @@ class GPTPipeline:
             class_type_str = class_type.__name__ + '\n'
             if issubclass(class_type, Valve_Module):
                 G.add_edge('DataFrame\n'+module.input_df_name, class_type_str+name)
-                G.add_edge('Valve_Module\n'+name, 'DataFrame\n'+module.output_df_name)
+                G.add_edge(class_type_str+name, 'DataFrame\n'+module.output_df_name)
             elif issubclass(class_type, LLM_Module):
                 G.add_edge('DataFrame\n'+module.input_df_name, class_type_str+name)
                 G.add_edge(class_type_str+name, 'DataFrame\n'+module.output_df_name)
@@ -844,6 +847,9 @@ class GPTPipeline:
                 G.add_edge('DataFrame\n'+module.input_df_name, class_type_str+name)
                 for output_df_name in module.output_df_names:
                     G.add_edge(class_type_str+name, 'DataFrame\n'+output_df_name)
+            elif issubclass(class_type, Apply_Module):
+                G.add_edge('DataFrame\n'+module.input_df_name, class_type_str+name)
+                G.add_edge(class_type_str+name, 'DataFrame\n'+module.output_df_name)
 
         for name, df_zip in self.dfs.items():
             df = df_zip[0]
