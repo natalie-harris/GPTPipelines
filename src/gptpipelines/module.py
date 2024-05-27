@@ -303,6 +303,8 @@ class ChatGPT_Module(LLM_Module):
         The maximum number of chunks into which the input text is split. Default is None.
     timeout : int, optional
         The timeout in seconds for GPT model requests. Default is None.
+    loop_function: function, optional
+        When supplied, ChatGPT module loops through each chunk in input_text and runs loop_function with each ChatGPT response until loop_function returns True, max_chunks_per_text is reached, or all chunks are evaluated. Output to output_text_column is the last received ChatGPT response.
     input_text_column : str
         The name of the column in the input DataFrame containing the text to be processed.
     input_completed_column : str
@@ -315,7 +317,7 @@ class ChatGPT_Module(LLM_Module):
         The name of the column in the output DataFrame that marks whether the entry has been processed.
     """
 
-    def __init__(self, pipeline, input_df_name, output_df_name, prompt, end_message=None, injection_columns=[], examples=[], model=None, context_window=None, temperature=None, safety_multiplier=None, max_chunks_per_text=None, timeout=None, input_text_column='Full Text', input_completed_column='Completed', output_text_column=None, output_response_column='Response', output_completed_column='Completed'):
+    def __init__(self, pipeline, input_df_name, output_df_name, prompt, end_message="", injection_columns=[], examples=[], model=None, context_window=None, temperature=None, safety_multiplier=None, max_chunks_per_text=None, timeout=None, loop_function=None, input_text_column='Full Text', input_completed_column='Completed', output_text_column=None, output_response_column='Response', output_completed_column='Completed'):
         """
         Initializes a ChatGPT_Module instance with specified configuration.
 
@@ -338,9 +340,10 @@ class ChatGPT_Module(LLM_Module):
 
         # important gpt request info
         self.prompt = prompt
-        self.end_message=end_message or ""
+        self.end_message=end_message
         self.examples = examples
         self.injection_columns = injection_columns
+        self.loop_function = loop_function
 
     def setup_dfs(self):
         """
@@ -420,6 +423,8 @@ class ChatGPT_Module(LLM_Module):
 
             # we don't need to include system message or examples for singleprompt module since they are static
             for system_message, chunk, examples, response in responses:
+                print(f"RESPONSE: {response}")
+
                 # Assuming 'entry' is a Series, convert it to a one-row DataFrame
                 new_entry_df = entry.to_frame().transpose().copy()
                 
@@ -575,7 +580,7 @@ class Apply_Module(Module):
     Module designed to iterate through each row in input_df and give requested features from row to an apply_function, which returns features (must be unique from features in input_df) to output_df. Copies all features from input_df into output_df.
     """
 
-    def __init__(self, pipeline, apply_function, input_df_name, output_df_name, input_columns=[], output_columns=[], input_completed_column='Completed', output_completed_column='Completed'):
+    def __init__(self, pipeline, apply_function, input_df_name, output_df_name, input_columns={}, output_columns=[], input_completed_column='Completed', output_completed_column='Completed'):
         super().__init__(pipeline=pipeline)
         self.process_function = apply_function
         self.input_columns = input_columns

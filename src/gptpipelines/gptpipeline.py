@@ -349,7 +349,7 @@ class GPTPipeline:
             raise TypeError("Input parameter must be a module")
         self.modules[name] = module
     
-    def add_chatgpt_module(self, name, input_df_name, output_df_name, prompt, end_message=None, injection_columns=[], examples=[], model=None, context_window=None, temperature=None, safety_multiplier=None, max_chunks_per_text=None, timeout=None, input_text_column=None, input_completed_column='Completed', output_text_column=None, output_response_column='Response', output_completed_column='Completed'):
+    def add_chatgpt_module(self, name, input_df_name, output_df_name, prompt, end_message=None, injection_columns=[], examples=[], model=None, context_window=None, temperature=None, safety_multiplier=None, max_chunks_per_text=None, timeout=None, loop_function=None, input_text_column=None, input_completed_column='Completed', output_text_column=None, output_response_column='Response', output_completed_column='Completed'):
         """
         Add a ChatGPT module to the pipeline.
 
@@ -391,7 +391,7 @@ class GPTPipeline:
             The name of the column indicating whether the output is completed.
         """
 
-        gpt_module = ChatGPT_Module(pipeline=self, input_df_name=input_df_name, output_df_name=output_df_name, prompt=prompt, end_message=end_message, injection_columns=injection_columns, examples=examples, model=model, context_window=context_window, temperature=temperature, safety_multiplier=safety_multiplier, max_chunks_per_text=max_chunks_per_text, timeout=timeout, input_text_column=input_text_column, input_completed_column=input_completed_column, output_text_column=output_text_column, output_response_column=output_response_column, output_completed_column=output_completed_column)
+        gpt_module = ChatGPT_Module(pipeline=self, input_df_name=input_df_name, output_df_name=output_df_name, prompt=prompt, end_message=end_message, injection_columns=injection_columns, examples=examples, model=model, context_window=context_window, temperature=temperature, safety_multiplier=safety_multiplier, max_chunks_per_text=max_chunks_per_text, timeout=timeout, loop_function=loop_function, input_text_column=input_text_column, input_completed_column=input_completed_column, output_text_column=output_text_column, output_response_column=output_response_column, output_completed_column=output_completed_column)
         self.modules[name] = gpt_module
 
     def add_code_module(self, name, process_function, input_df_names=[], output_df_names=[]):
@@ -759,7 +759,7 @@ class GPTPipeline:
             return None
         return dfs
 
-    def process_text(self, system_message, user_message, end_message="", injections=[], model=None, model_context_window=None, temp=None, examples=[], timeout=None, safety_multiplier=None, max_chunks_per_text=None, module_name=None):
+    def process_text(self, system_message, user_message, end_message="", injections=[], model=None, model_context_window=None, temp=None, examples=[], timeout=None, safety_multiplier=None, max_chunks_per_text=None, module_name=None, loop_function=None):
         """
         Process a single text through the GPT broker, handling defaults and injections.
 
@@ -839,11 +839,23 @@ class GPTPipeline:
         pbar = tqdm(total=len(text_chunks), leave=False, desc=description)
 
         responses = []
+        valid_loop_function = loop_function is not None and callable(loop_function)
+
         for chunk in text_chunks:
             response = self.gpt_broker.get_chatgpt_response(self.LOG, system_message, chunk, model, model_context_window, end_message, temp, examples, timeout)
             responses.append((system_message, chunk, examples, response))
             pbar.update(1)
             pbar.refresh()
+
+            if valid_loop_function:
+                loop_response = loop_function(response)
+                if loop_response is None or not isinstance(loop_response, bool):
+                    raise TypeError("Expected boolean return value from loop function.")
+                if loop_response == True:
+                    continue
+
+        if valid_loop_function:
+            return responses[-1]
 
         return responses
     
@@ -865,6 +877,9 @@ class GPTPipeline:
                 for output_df_name in module.output_df_names:
                     G.add_edge(class_type_str+name, 'DataFrame\n'+output_df_name)
             elif issubclass(class_type, Apply_Module):
+                G.add_edge('DataFrame\n'+module.input_df_name, class_type_str+name)
+                G.add_edge(class_type_str+name, 'DataFrame\n'+module.output_df_name)
+            elif issubclass(class_type, Carry_If_True_Module):
                 G.add_edge('DataFrame\n'+module.input_df_name, class_type_str+name)
                 G.add_edge(class_type_str+name, 'DataFrame\n'+module.output_df_name)
 
