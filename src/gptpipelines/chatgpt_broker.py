@@ -5,6 +5,7 @@ import tiktoken
 import time
 import logging
 from tqdm.contrib.logging import logging_redirect_tqdm
+import json
 
 class ChatGPTBroker:
     """
@@ -51,7 +52,7 @@ class ChatGPTBroker:
             logging.getLogger("httpx").setLevel(logging.WARNING)
             logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-    def get_tokenized_length(self, system_message, user_message, model, examples=[], end_message=""):
+    def get_tokenized_length(self, system_message, user_message, model, examples=[], end_message="", tokenizer=None):
         """
         Calculates the total number of tokens for a given set of messages and examples,
         based on the tokenization process of a specified model.
@@ -82,7 +83,10 @@ class ChatGPTBroker:
             total_text += example["content"]
         
         # Get the encoding (tokenizer) associated with the specified model.
-        encoding = tiktoken.encoding_for_model(model)
+        if tokenizer is not None:
+            encoding = tiktoken.encoding_for_model(tokenizer)
+        else:
+            encoding = tiktoken.encoding_for_model(model)
         
         # Use the encoding (tokenizer) to tokenize the text
         # and then calculate the number of tokens in the tokenized text.
@@ -91,7 +95,7 @@ class ChatGPTBroker:
         return num_tokens
     
     # safety multipliers limits max message length just in case tiktoken incorrectly splits tokens
-    def split_message_to_lengths(self, system_message, user_message, model, max_context_window, examples=[], end_message="", safety_multiplier=1.0):
+    def split_message_to_lengths(self, system_message, user_message, model, max_context_window, examples=[], end_message="", safety_multiplier=1.0, tokenizer=None):
         """
         Splits a message into chunks that fit within a model's maximum context window, considering
         safety multipliers and additional examples.
@@ -117,16 +121,19 @@ class ChatGPTBroker:
             A list of message chunks, each fitting within the specified token limit.
         """
 
+        if tokenizer is None:
+            tokenizer = model
+
         if safety_multiplier > 1.0:
             safety_multiplier = 1.0
         elif safety_multiplier <= 0:
             safety_multiplier = 0.01
 
-        static_token_length = self.get_tokenized_length(system_message, "", model, examples, end_message=end_message)
+        static_token_length = self.get_tokenized_length(system_message, "", model, examples, end_message=end_message, tokenizer=tokenizer)
         if static_token_length >= max_context_window * safety_multiplier:
             return []
 
-        total_token_length = self.get_tokenized_length(system_message, user_message, model, examples, end_message=end_message)
+        total_token_length = self.get_tokenized_length(system_message, user_message, model, examples, end_message=end_message, tokenizer=tokenizer)
         if total_token_length <= max_context_window * safety_multiplier:
             return [user_message]
         
@@ -142,14 +149,14 @@ class ChatGPTBroker:
             new_index = int(max_chunk_tokens * multiplier)
 
             user_chunk = user_message[i:i+new_index]
-            user_chunk_tokens = self.get_tokenized_length('', user_chunk, model, [])
+            user_chunk_tokens = self.get_tokenized_length('', user_chunk, model, [], tokenizer=tokenizer)
             
             # If the token length exceeds the max allowed, reduce the message length and recheck
             while user_chunk_tokens > max_chunk_tokens:
                 multiplier *= 0.95
                 new_index = int(max_chunk_tokens * multiplier)
                 user_chunk = user_message[i:i+new_index]
-                user_chunk_tokens = self.get_tokenized_length('', user_chunk, 'gpt-3.5-turbo', [])
+                user_chunk_tokens = self.get_tokenized_length('', user_chunk, 'gpt-3.5-turbo', [], tokenizer=tokenizer)
             
             # Save the chunk and move to the next segment of text
             chunks.append(user_chunk)
@@ -158,7 +165,7 @@ class ChatGPTBroker:
         # else we need to split up the message into chunks. I may have a function that does this in original SBW parser
         return chunks
     
-    def get_chatgpt_response(self, LOG, system_message, user_message, model, model_context_window, end_message="", temp=0, examples=[], timeout=15):
+    def get_chatgpt_response(self, LOG, system_message, user_message, model, model_context_window, end_message="", temp=0, get_log_probabilities=False, examples=[], timeout=15, tokenizer=None):
         """
         Fetches a response from ChatGPT based on a user's message and a system message.
 
@@ -185,7 +192,10 @@ class ChatGPTBroker:
             The generated response from the ChatGPT model, or None if an error occurred.
         """
 
-        tokenized_length = self.get_tokenized_length(system_message, user_message, model, examples)
+        if tokenizer is None:
+            tokenizer = model
+
+        tokenized_length = self.get_tokenized_length(system_message, user_message, model, examples, tokenizer=tokenizer)
         if tokenized_length > model_context_window:
             logging.info('Prompt too long...')
             return ['Prompt too long...']
@@ -212,12 +222,28 @@ class ChatGPTBroker:
                     response = self.client.chat.completions.create(model=model,
                     messages=new_messages,
                     temperature=temp,
+                    logprobs=get_log_probabilities,
                     timeout=timeout)
                     
                     # Extract the generated text from the API response
-                    generated_text = response.choices[0].message.content
+                    choices = response.choices[0]
+                    generated_text = choices.message.content
+                    log_probs = None
+                    if get_log_probabilities:
+                        log_probs = choices.logprobs.content
                     got_response = True
-                    return generated_text
+
+                    if get_log_probabilities:
+                        formatted_log_probs = {
+                            'tokens': [],
+                            'log_probs': []
+                        }
+                        for log_prob in log_probs:
+                            formatted_log_probs['tokens'].append(log_prob.token)
+                            formatted_log_probs['log_probs'].append(log_prob.logprob)
+                        log_probs = json.dumps(formatted_log_probs)
+
+                    return generated_text, log_probs
                     
                 except openai.RateLimitError as err:
                     # Handle rate limit errors

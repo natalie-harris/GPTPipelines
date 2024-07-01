@@ -68,3 +68,28 @@ def all_entries_are_true(dictionary):
         if dictionary[entry] is False:
             return False
     return True
+
+def get_unique_columns_and_dtypes(dfs):
+    """
+    Takes a list of DataFrames and returns a list of unique column names and their data types.
+
+    Parameters:
+    dfs (list): List of pandas DataFrames.
+
+    Returns:
+    list: List of tuples, where each tuple contains a unique column name and its data type.
+    """
+    unique_columns_and_dtypes = {}
+    
+    for df in dfs:
+        for col in df.columns:
+            col_name = col.strip()
+            col_dtype = df[col].dtype
+            
+            if col_name not in unique_columns_and_dtypes:
+                unique_columns_and_dtypes[col_name] = col_dtype
+
+    # Convert the dictionary to a list of tuples
+    unique_columns_and_dtypes_list = [(col, dtype) for col, dtype in unique_columns_and_dtypes.items()]
+    
+    return unique_columns_and_dtypes_list
